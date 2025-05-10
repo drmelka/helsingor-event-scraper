@@ -6,19 +6,18 @@ def append_rows(rows):
     if not rows:
         return
 
-    # Hent service-konto-credentials fra GitHub secret
+    # Credentials fra GitHub secret
     creds = json.loads(os.environ["GSERVICE_KEY"])
     gc    = gspread.service_account_from_dict(creds)
 
-    # Åbn arket via Sheet-ID (også fra GitHub secret)
+    # Åbn første fane i arket
     sh = gc.open_by_key(os.environ["SHEET_ID"]).worksheet("Sheet1")
 
-    # Skriv rækkerne uden at overskrive eksisterende data
+    # Konverter til DataFrame og tilføj under sidste eksisterende række
+    df = pd.DataFrame(rows)
     set_with_dataframe(
-        sh,
-        pd.DataFrame(rows),
+        sh, df,
         include_column_header=False,
-        row=sh.row_count + 1,
-        resize=False,
+        row=sh.row_count + 1,   # skriv efter sidste udfyldte række
+        resize=False
     )
-
