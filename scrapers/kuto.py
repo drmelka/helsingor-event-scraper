@@ -1,30 +1,33 @@
-import requests, datetime as dt
+import requests, datetime as dt, re
 from bs4 import BeautifulSoup
 
 def parse():
-    url = "https://kuto.dk/kalender/"
-    soup = BeautifulSoup(requests.get(url, timeout=30).text, "html.parser")
+    url  = "https://kuto.dk/kalender/"
+    html = requests.get(url, timeout=30).text
+    soup = BeautifulSoup(html, "html.parser")
 
-    for card in soup.select("h5.entry-title > a"):
-        title = card.get_text(strip=True)
-        link  = card["href"]
-        date  = card.find_next("p").get_text(strip=True)   # fx 7. august 2025
+    # find A-tags der peger på en event-side
+    for a in soup.select("a[href^='/arrangementer/']"):
+        title = a.get_text(strip=True)
+        link  = "https://kuto.dk" + a["href"]
+
+        # Datoen står i den efterfølgende tekstnode, fx "Fredag 9. maj 2025"
+        date_text = a.find_next(string=re.compile(r"\d{4}")).strip()
         try:
-            date_parsed = dt.datetime.strptime(date, "%d. %B %Y").date()
+            date_obj = dt.datetime.strptime(date_text, "%d. %B %Y").date()
         except ValueError:
-            # format kunne ikke parses – spring over
-            continue
+            continue  # spring hvis formatet ikke passer
 
-        if date_parsed < dt.date.today():
+        if date_obj < dt.date.today():
             continue  # kun fremtidige events
 
         yield {
             "Title": title,
-            "Start Date": date_parsed.isoformat(),
+            "Start Date": date_obj.isoformat(),
             "Start Time": "",
             "End Date": "",
             "End Time": "",
-            "Location": "Kulturværftet (KUTO)",
+            "Location": "Kulturværftet / Toldkammeret",
             "Description": "",
             "Link": link
         }
