@@ -1,71 +1,73 @@
-import datetime as dt, json, re, time, requests, html
+import datetime as dt, json, re, time, html, requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 URL_LIST = "https://kuto.dk/kalender/"
+UA       = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-# ---------- helpers ----------
-def iso_to_parts(iso: str):
-    """2025-05-16T19:00:00+02:00  ->  ('2025-05-16', '19:00')"""
-    if not iso:
-        return ("", "")
-    date_part, time_part = iso.split("T")
-    return (date_part, time_part[:5])        # HH:MM
+# ---- helpers ----
+DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})")
+today   = dt.date.today()
 
-def clean(txt: str) -> str:
-    return html.unescape(re.sub(r"\s+", " ", txt)).strip()
+def iso_parts(iso):
+    m = DATE_RE.match(iso or "")
+    return (m.group(1), m.group(2)) if m else ("", "")
 
-# ---------- main ----------
+def clean(txt): return html.unescape(re.sub(r"\s+", " ", txt)).strip()
+
+def ldjson_from(html_text):
+    soup = BeautifulSoup(html_text, "html.parser")
+    tag  = soup.find("script", type="application/ld+json")
+    if not tag: return None
+    data = json.loads(tag.string)
+    if isinstance(data, list):
+        data = next((d for d in data if d.get("@type") == "Event"), None)
+    return data
+
+# ---- main ----
 def parse():
-    # 1) hent listen én gang med Playwright
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(URL_LIST, timeout=60000)
-        page.wait_for_selector("h5.ultp-block-title a")
-        html_list = page.content()
-        browser.close()
+        br = p.chromium.launch(headless=True)
+        pg = br.new_page()
+        pg.goto(URL_LIST, timeout=60000)
+        pg.wait_for_selector("h5.ultp-block-title a")
+        list_html = pg.content()
 
-    soup = BeautifulSoup(html_list, "html.parser")
-    links = soup.select("h5.ultp-block-title a")
-    print(f"DEBUG: fandt {len(links)} links")
+        links = BeautifulSoup(list_html, "html.parser").select("h5.ultp-block-title a")
+        print(f"DEBUG: fandt {len(links)} links")
 
-    today = dt.date.today()
+        for a in links:
+            url  = a["href"]
 
-    for a in links:
-        url = a["href"]
-        ev_html = requests.get(url, timeout=30).text
-        ev = BeautifulSoup(ev_html, "html.parser")
+            # 1) prøv lynhurtigt med requests + UA
+            r = requests.get(url, headers=UA, timeout=30)
+            data = ldjson_from(r.text)
 
-        # 2) hent ld+json script-blokken
-        json_tag = ev.find("script", type="application/ld+json")
-        if not json_tag:
-            continue
-        try:
-            data = json.loads(json_tag.string)
-            # Hvis siden indeholder List & Event, find den med "@type": "Event"
-            if isinstance(data, list):
-                data = next(d for d in data if d.get("@type") == "Event")
-        except Exception:
-            continue
+            # 2) hvis JSON mangler ➜ Playwright-fallback
+            if data is None:
+                pg.goto(url, timeout=60000)
+                data = ldjson_from(pg.content())
 
-        # 3) træk felter ud
-        start_date, start_time = iso_to_parts(data.get("startDate", ""))
-        end_date,   end_time   = iso_to_parts(data.get("endDate",   ""))
+            if data is None:
+                continue   # stadig intet – spring over
 
-        # spring gamle events over
-        if start_date and dt.date.fromisoformat(start_date) < today:
-            continue
+            sd, st = iso_parts(data.get("startDate", ""))
+            if sd and dt.date.fromisoformat(sd) < today:
+                continue   # gammel event
 
-        yield {
-            "Title":        data.get("name", a.get_text(strip=True)),
-            "Start Date":   start_date,
-            "Start Time":   start_time,
-            "End Date":     end_date,
-            "End Time":     end_time,
-            "Location":     data.get("location", {}).get("name", ""),
-            "Description":  clean(data.get("description", "")),
-            "Image":        data.get("image", ""),        # NY kolonne
-            "Link":         url,
-        }
-        time.sleep(0.2)     # høflig pause
+            ed, et = iso_parts(data.get("endDate", ""))
+
+            yield {
+                "Title":       data.get("name", "").strip(),
+                "Start Date":  sd,
+                "Start Time":  st,
+                "End Date":    ed,
+                "End Time":    et,
+                "Location":    data.get("location", {}).get("name", ""),
+                "Description": clean(data.get("description", "")),
+                "Image":       data.get("image", ""),
+                "Link":        url,
+            }
+            time.sleep(0.1)   # høflig pause
+
+        br.close()
