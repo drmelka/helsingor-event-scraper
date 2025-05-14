@@ -1,55 +1,43 @@
 import requests, datetime as dt, re
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
-# ---------- hjælpe-funktioner ----------
-MONTHS_DK = {
-    "januar": 1, "februar": 2, "marts": 3, "april": 4,
-    "maj": 5, "juni": 6, "juli": 7, "august": 8,
-    "september": 9, "oktober": 10, "november": 11, "december": 12
+# --- dansk månedstabeller ---
+MONTHS = {
+    "januar":1,"februar":2,"marts":3,"april":4,"maj":5,"juni":6,
+    "juli":7,"august":8,"september":9,"oktober":10,"november":11,"december":12
 }
+DATE_PAT = re.compile(r"(\d{1,2})\.*\s*(?:–\s*\d{1,2}\.*\s*)?([a-zæøå]+)\s+(\d{4})", re.I)
 
-DATE_RE = re.compile(
-    r"(\d{1,2})\.*\s*(?:–\s*\d{1,2}\.*\s*)?([a-zæøå]+)\s+(\d{4})",
-    re.I
-)
-
-def parse_date(text: str):
-    """
-    Træk første dato ud af fx
-    '9. – 21. maj 2025'  eller  '14. maj 2025'
-    -> datetime.date
-    """
-    m = DATE_RE.search(text)
+def first_date(text):
+    """Returner datetime.date eller None fra dato-streng"""
+    m = DATE_PAT.search(text)
     if not m:
         return None
-    day, month_txt, year = m.groups()
-    month = MONTHS_DK.get(month_txt.lower())
-    if not month:
-        return None
-    return dt.date(int(year), month, int(day))
+    d, m_txt, y = m.groups()
+    month = MONTHS.get(m_txt.lower())
+    return dt.date(int(y), month, int(d))
 
-# ---------- hoved-parser ----------
 def parse():
     url  = "https://kuto.dk/kalender/"
-    html = requests.get(url, timeout=30).text
-    soup = BeautifulSoup(html, "html.parser")
+    soup = BeautifulSoup(requests.get(url, timeout=30).text, "html.parser")
 
-    anchors = soup.select("a[href^='/arrangementer/']")
-    print(f"DEBUG: fandt {len(anchors)} links")
+    links = soup.select("h5 > a[href]")
+    print(f"DEBUG: {len(links)} <h5><a> fundet")
 
-    for idx, a in enumerate(anchors[:10]):           # viser kun de 10 første i log
-        title = a.get_text(strip=True)
-        next_txt = a.find_next(text=True)
-        print(f"DEBUG[{idx}]: '{title}' / '{next_txt.strip() if next_txt else ''}'")
+    for a in links:
+        # Find første tekst-node efter <a> der ikke kun er whitespace
+        nxt = a.next_sibling
+        while nxt and (not isinstance(nxt, NavigableString) or not nxt.strip()):
+            nxt = nxt.next_sibling
 
-        date_text = next_txt.strip() if next_txt else ""
-        start_date = parse_date(date_text)
-        if not start_date or start_date < dt.date.today():
+        date_txt = nxt.strip() if nxt else ""
+        date_obj = first_date(date_txt)
+        if not date_obj or date_obj < dt.date.today():
             continue
 
         yield {
-            "Title": title,
-            "Start Date": start_date.isoformat(),
+            "Title": a.get_text(strip=True),
+            "Start Date": date_obj.isoformat(),
             "Start Time": "",
             "End Date": "",
             "End Time": "",
