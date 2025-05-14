@@ -1,42 +1,41 @@
 import datetime as dt, re
-from bs4 import BeautifulSoup, NavigableString
+from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
 URL = "https://kuto.dk/kalender/"
 
-# ---------- lille helper til danske datoer ----------
+# ---------- dato-helper ----------
 MONTHS = {"januar":1,"februar":2,"marts":3,"april":4,"maj":5,"juni":6,
-          "juli":7,"august":8,"september":9,"oktober":10,
-          "november":11,"december":12}
+          "juli":7,"august":8,"september":9,"oktober":10,"november":11,"december":12}
 DATE_RE = re.compile(r"(\d{1,2})\.*.*?([a-zæøå]+)\s+(\d{4})", re.I)
 
-def parse_date(text):
-    m = DATE_RE.search(text)
+def parse_date(txt: str):
+    m = DATE_RE.search(txt)
     if not m:
         return None
-    d, m_txt, y = m.groups()
-    return dt.date(int(y), MONTHS[m_txt.lower()], int(d))
+    d, month_txt, y = m.groups()
+    return dt.date(int(y), MONTHS[month_txt.lower()], int(d))
 
-# ---------- hoved-funktion -----------
+# ---------- hoved-funktion ----------
 def parse():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(URL, timeout=60000)
-        page.wait_for_selector("h5.entry-title > a")
+        page.wait_for_selector("h5.ultp-block-title a")      # venter til listen er fremme
         html = page.content()
         browser.close()
 
     soup = BeautifulSoup(html, "html.parser")
-    links = soup.select("h5.entry-title > a")
+    links = soup.select("h5.ultp-block-title a")
     print(f"DEBUG: fandt {len(links)} links")
 
     for a in links:
-        nxt = a.next_sibling
-        while nxt and (not isinstance(nxt, NavigableString) or not nxt.strip()):
-            nxt = nxt.next_sibling
-        date_txt = nxt.strip() if nxt else ""
-        start = parse_date(date_txt)
+        # datotekst ligger i den følgende div.med class 'ultp-block-excerpt'
+        excerpt = a.find_parent("h5").find_next("div", class_="ultp-block-excerpt")
+        if not excerpt:
+            continue
+        start = parse_date(excerpt.get_text(" ", strip=True))
         if not start or start < dt.date.today():
             continue
 
