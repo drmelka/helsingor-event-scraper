@@ -1,15 +1,14 @@
-import datetime as dt, re, time, html
-import requests
+import datetime as dt, re, time, html, requests
 from bs4 import BeautifulSoup, NavigableString
 from playwright.sync_api import sync_playwright
 
 URL_LIST = "https://kuto.dk/kalender/"
 
-# ---------------- helpers ----------------
+# ---------- helpers ----------
 MONTHS = {"januar":1,"februar":2,"marts":3,"april":4,"maj":5,"juni":6,
           "juli":7,"august":8,"september":9,"oktober":10,"november":11,"december":12}
-DATE_RE = re.compile(r"(\d{1,2})\.*.*?([a-zæøå]+)\s+(\d{4})", re.I)
-TIME_RE = re.compile(r"(\d{1,2})[:.](\d{2})")
+DATE_RE  = re.compile(r"(\d{1,2})\.*.*?([a-zæøå]+)\s+(\d{4})", re.I)
+CLOCK_RE = re.compile(r"(\d{1,2})[:.](\d{2})")         # fx 19:30
 
 def parse_date(text: str):
     m = DATE_RE.search(text)
@@ -18,12 +17,16 @@ def parse_date(text: str):
     d, m_txt, y = m.groups()
     return dt.date(int(y), MONTHS[m_txt.lower()], int(d))
 
+def first_time(text: str) -> str:
+    m = CLOCK_RE.search(text)
+    return f"{int(m.group(1)):02d}:{m.group(2)}" if m else ""
+
 def clean(txt):
     return html.unescape(re.sub(r"\s+", " ", txt)).strip()
 
-# ---------------- main ----------------
+# ---------- main ----------
 def parse():
-    # 1) hent forsiden med Playwright for at få alle links
+    # (1) hent liste-siden m. Playwright
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
@@ -37,41 +40,31 @@ def parse():
     print(f"DEBUG: fandt {len(links)} links")
 
     for a in links:
-        # dato-tekst ligger i næste div
         date_txt = a.find_parent("h5").find_next("div", class_="ultp-block-excerpt").get_text(" ", strip=True)
         start_date = parse_date(date_txt)
         if not start_date or start_date < dt.date.today():
             continue
 
-        # 2) hent selve event-siden for detaljer
         url = a["href"]
-        page_soup = BeautifulSoup(requests.get(url, timeout=30).text, "html.parser")
+        ev_html = requests.get(url, timeout=30).text
+        ev = BeautifulSoup(ev_html, "html.parser")
 
-        # start / slut tid i <meta>
-        st_meta = page_soup.find("meta", {"property": "event:start_time"})
-        start_time = st_meta["content"][:5] if st_meta else ""
+        # (2) tid & evt. slutdato i schedule-blokken
+        sched = ev.select_one(".tribe-events-schedule, .event-schedule, .ultp-events-time")
+        start_time = first_time(sched.get_text(" ", strip=True)) if sched else ""
 
-        en_meta = page_soup.find("meta", {"property": "event:end_time"})
-        end_time = en_meta["content"][:5] if en_meta else ""
-
-        en_d_meta = page_soup.find("meta", {"property": "event:end_date"})
-        end_date = ""
-        if en_d_meta:
-            y,m,d = en_d_meta["content"].split("-")
-            end_date = dt.date(int(y), int(m), int(d)).isoformat()
-
-        # beskrivelse
-        desc_block = page_soup.select_one(".tribe-events-single-event-description")
+        # (3) beskrivelse
+        desc_block = ev.select_one(".tribe-events-single-event-description, .entry-content")
         description = clean(desc_block.get_text(" ", strip=True)) if desc_block else ""
 
         yield {
             "Title":       a.get_text(strip=True),
             "Start Date":  start_date.isoformat(),
             "Start Time":  start_time,
-            "End Date":    end_date,
-            "End Time":    end_time,
+            "End Date":    "",     # Kuto viser sjældent sluttid – kan udfyldes senere
+            "End Time":    "",
             "Location":    "Kulturværftet / Toldkammeret",
             "Description": description,
             "Link":        url,
         }
-        time.sleep(0.3)   # høflig pause så vi ikke spammer webserveren
+        time.sleep(0.2)   # høflig pause
