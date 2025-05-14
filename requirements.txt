@@ -3,3 +3,5 @@ beautifulsoup4
 gspread
 gspread_dataframe
 playwright
+icalendar
+pytz
